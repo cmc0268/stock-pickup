@@ -112,11 +112,8 @@ def main():
     stocks = get_stock_list()
     n = len(stocks)
     if n == 0:
-        print("종목 목록을 받지 못했습니다.", file=sys.stderr)
-        # 그래도 빈 결과를 써서 웹앱이 '데이터 없음'을 보이게 함
-        _write({"updated_at": datetime.now(KST).isoformat(),
-                "error": "종목 목록 수신 실패",
-                "scanned": 0, "picks": [], "riri": []})
+        # 종목 목록 실패 시: 기존 결과를 절대 덮어쓰지 않음 (자료 보존)
+        print("종목 목록을 받지 못했습니다. 기존 picks.json 보존.", file=sys.stderr)
         sys.exit(1)
     start = (datetime.now(KST) - timedelta(days=core.LOOKBACK_DAYS)).strftime("%Y-%m-%d")
     print(f"[스캔] {n}종목, 워커 {MAX_WORKERS}개, 시작일 {start}")
@@ -165,6 +162,11 @@ def main():
         "picks": [trim(r) for r in picks],
         "riri": [trim(r) for r in riri],
     }
+    # 분석 결과가 비정상적으로 적으면(데이터 대량 실패) 기존 자료 보존
+    if len(results) < max(30, int(n * 0.3)):
+        print(f"분석 {len(results)}/{n} — 너무 적어 실패로 간주. "
+              f"기존 picks.json 보존(덮어쓰지 않음).", file=sys.stderr)
+        sys.exit(1)
     _write(out)
     print(f"[완료] 분석 {len(results)}/{n} · 관심후보 {len(picks)} · "
           f"리 {len(riri)} · {out['elapsed_sec']}s → {OUT_PATH}")
