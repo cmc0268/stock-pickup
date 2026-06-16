@@ -6,12 +6,14 @@ name: scan
 #  15:20 KST = 06:20 UTC
 #  20:00 KST = 11:00 UTC
 on:
-  schedule:
+  schedule:                    # GitHub 자체 스케줄 (지연 잦음 — 백업용)
     - cron: "50 23 * * 0-4"   # 08:50 KST (월~금: UTC 일~목)
     - cron: "0 3 * * 1-5"     # 12:00 KST
     - cron: "20 6 * * 1-5"    # 15:20 KST
     - cron: "0 11 * * 1-5"    # 20:00 KST
   workflow_dispatch:           # 수동 실행 버튼
+  repository_dispatch:         # 외부 스케줄러(cron-job.org) 호출용
+    types: [run-scan]
 
 permissions:
   contents: write
@@ -54,3 +56,4 @@ jobs:
             git commit -m "scan: $(date -u +'%Y-%m-%d %H:%M UTC')"
             git push
           fi
+
