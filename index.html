@@ -29,9 +29,14 @@
   h1{font-size:19px; font-weight:800; letter-spacing:-.02em; margin:0;}
   h1 .sub{font-size:11px; font-weight:600; color:var(--mute); margin-left:6px;}
   .updated{font-size:11px; color:var(--dim); white-space:nowrap;}
+  .hbtns{display:flex; gap:6px;}
   .refresh{background:none; border:1px solid var(--line); color:var(--mute);
     border-radius:8px; padding:4px 9px; font-size:11px; font-weight:600;}
   .refresh:active{background:var(--card);}
+  #btnScan{border-color:#3a5d9c; color:#9fc0ff;}
+  #btnScan:disabled{opacity:.5;}
+  .scanmsg{font-size:11.5px; margin-top:5px; min-height:14px; color:#9fc0ff;}
+  .scanmsg.err{color:#ff9b9b;} .scanmsg.ok{color:#6fe0a8;}
 
   .tabs{display:flex; gap:6px; margin-top:10px;}
   .tab{flex:1; text-align:center; padding:9px 0; border-radius:10px; font-size:13px;
@@ -97,9 +102,13 @@
 <header>
   <div class="titlebar">
     <h1>관심 후보<span class="sub">이평선 6단계 · 괘상</span></h1>
-    <button class="refresh" id="btnRefresh">새로고침</button>
+    <div class="hbtns">
+      <button class="refresh" id="btnScan">스캔 실행</button>
+      <button class="refresh" id="btnRefresh">새로고침</button>
+    </div>
   </div>
   <div class="updated" id="updated">불러오는 중…</div>
+  <div class="scanmsg" id="scanmsg"></div>
   <div class="tabs">
     <div class="tab on" data-tab="geon">단계별 건(乾)<span class="cnt" id="cntGeon">·</span></div>
     <div class="tab" data-tab="riri">4단계 리(離)<span class="cnt" id="cntRiri">·</span></div>
@@ -378,11 +387,110 @@ document.querySelectorAll('.tab').forEach(t=>{
   });
 });
 $('#btnRefresh').addEventListener('click', load);
+$('#btnScan').addEventListener('click', triggerScan);
 $('#mClose').addEventListener('click', closeChart);
 $('#modal').addEventListener('click', e=>{ if(e.target.id==='modal') closeChart(); });
 window.addEventListener('resize', ()=>{ if($('#modal').classList.contains('on')){
   const code=$('#mCode').textContent.replace(/[()]/g,''); const r=findStock(code); if(r&&r.chart) drawChart(r.chart);
 }});
+
+/* ── 폰에서 직접 스캔 실행 (GitHub repository_dispatch 호출) ── */
+// Pages 주소에서 소유자/저장소 자동 추출: https://<owner>.github.io/<repo>/
+function repoInfo(){
+  const host = location.hostname;               // cmc0268.github.io
+  const owner = host.split('.')[0];             // cmc0268
+  const repo = location.pathname.split('/').filter(Boolean)[0] || ''; // stock-picks
+  return {owner, repo};
+}
+function getToken(){
+  let t='';
+  try{ t=localStorage.getItem('gh_token')||''; }catch(e){}
+  return t;
+}
+function setToken(t){
+  try{ localStorage.setItem('gh_token', t); }catch(e){}
+}
+function scanMsg(text, cls){
+  const el=$('#scanmsg'); el.textContent=text||'';
+  el.className='scanmsg'+(cls?(' '+cls):'');
+}
+
+async function triggerScan(){
+  const {owner, repo} = repoInfo();
+  if(!owner || !repo){
+    scanMsg('주소에서 저장소를 찾지 못했습니다. GitHub Pages 주소에서 실행하세요.', 'err');
+    return;
+  }
+  let token=getToken();
+  if(!token){
+    token=prompt('처음 한 번만: GitHub 토큰(ghp_...)을 입력하세요.\n'
+      +'(설정 → Developer settings → Tokens(classic), repo 권한)\n'
+      +'입력하면 이 기기에 저장되어 다음부터는 묻지 않습니다.');
+    if(!token){ scanMsg('토큰이 없어 취소했습니다.', 'err'); return; }
+    token=token.trim(); setToken(token);
+  }
+  const btn=$('#btnScan'); btn.disabled=true;
+  scanMsg('스캔 요청 중…');
+  // 요청 직전 시각(이 시각 이후에 갱신되면 새 결과로 판단)
+  const beforeTime = DATA && DATA.updated_at ? new Date(DATA.updated_at).getTime() : 0;
+  try{
+    const res=await fetch(`https://api.github.com/repos/${owner}/${repo}/dispatches`,{
+      method:'POST',
+      headers:{
+        'Accept':'application/vnd.github+json',
+        'Authorization':'Bearer '+token,
+        'X-GitHub-Api-Version':'2022-11-28'
+      },
+      body: JSON.stringify({event_type:'run-scan'})
+    });
+    if(res.status===204){
+      scanMsg('스캔 시작됨 · 결과 기다리는 중… (보통 2~4분)');
+      pollNewData(beforeTime, 0);
+    }else if(res.status===401){
+      scanMsg('토큰 인증 실패(401). 토큰을 다시 설정하세요.', 'err');
+      try{ localStorage.removeItem('gh_token'); }catch(e){}
+      btn.disabled=false;
+    }else if(res.status===403 || res.status===404){
+      scanMsg('권한 오류('+res.status+'). 토큰의 repo 권한·저장소 이름을 확인하세요.', 'err');
+      try{ localStorage.removeItem('gh_token'); }catch(e){}
+      btn.disabled=false;
+    }else{
+      scanMsg('요청 실패: HTTP '+res.status, 'err'); btn.disabled=false;
+    }
+  }catch(e){
+    scanMsg('네트워크 오류: '+e.message, 'err'); btn.disabled=false;
+  }
+}
+
+// data/picks.json이 새로 갱신될 때까지 주기적으로 확인
+async function pollNewData(beforeTime, tries){
+  if(tries>40){ // 약 6~7분 후 중단
+    scanMsg('아직 갱신되지 않았습니다. 잠시 후 새로고침해 보세요.', 'err');
+    $('#btnScan').disabled=false; return;
+  }
+  try{
+    const res=await fetch('data/picks.json?t='+Date.now(), {cache:'no-store'});
+    if(res.ok){
+      const j=await res.json();
+      const t=j.updated_at?new Date(j.updated_at).getTime():0;
+      if(t>beforeTime){
+        DATA=j; render(); markUpdated();
+        scanMsg('스캔 완료 · 최신 결과로 갱신되었습니다.', 'ok');
+        $('#btnScan').disabled=false;
+        setTimeout(()=>scanMsg(''), 4000);
+        return;
+      }
+    }
+  }catch(e){}
+  setTimeout(()=>pollNewData(beforeTime, tries+1), 10000); // 10초마다
+}
+
+function markUpdated(){
+  if(!DATA||DATA.error) return;
+  const dt=new Date(DATA.updated_at);
+  const hh=String(dt.getHours()).padStart(2,'0'), mm=String(dt.getMinutes()).padStart(2,'0');
+  $('#updated').textContent=`${dt.getMonth()+1}/${dt.getDate()} ${hh}:${mm} 기준 · 분석 ${DATA.scanned||0}종목`;
+}
 
 load();
 </script>
