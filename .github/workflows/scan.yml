@@ -43,7 +43,14 @@ jobs:
           TOP_KOSPI: "380"
           TOP_KOSDAQ: "420"
           MAX_WORKERS: "24"
-        run: python scan_job.py
+        run: |
+          # 스캔 실패(데이터 수신 부족) 시 기존 picks.json 보존하고 비정상 종료(exit 1).
+          # 그 경우에도 워크플로는 계속 진행하되 커밋 단계에서 변경 없음으로 끝남.
+          python scan_job.py || echo "scan_skipped=1" >> "$GITHUB_ENV"
+
+      - name: Note (skipped)
+        if: env.scan_skipped == '1'
+        run: echo "데이터 수신 부족으로 이번 스캔은 건너뜀 — 기존 결과 보존됨"
 
       - name: Commit results
         run: |
@@ -56,4 +63,3 @@ jobs:
             git commit -m "scan: $(date -u +'%Y-%m-%d %H:%M UTC')"
             git push
           fi
-
